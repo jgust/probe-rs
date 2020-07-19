@@ -36,8 +36,8 @@ impl From<CmsisDapError> for DebugProbeError {
 }
 
 pub enum DAPLinkDevice {
-    /// CMSIS-DAP v1 over HID. Stores a HID device handle.
-    V1(hidapi::HidDevice),
+    /// CMSIS-DAP v1 over HID. Stores a HID device handle and the HID report size.
+    V1(hidapi::HidDevice, usize),
 
     /// CMSIS-DAP v2 over WinUSB/Bulk. Stores an rusb device handle and out/in EP addresses.
     V2 {
@@ -51,7 +51,7 @@ impl DAPLinkDevice {
     /// Read from the probe into `buf`, returning the number of bytes read on success.
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
         match self {
-            DAPLinkDevice::V1(device) => Ok(device.read_timeout(buf, 100)?),
+            DAPLinkDevice::V1(device, _) => Ok(device.read_timeout(buf, 100)?),
             DAPLinkDevice::V2 {
                 handle,
                 out_ep: _,
@@ -66,7 +66,7 @@ impl DAPLinkDevice {
     /// Write `buf` to the probe, returning the number of bytes written on success.
     fn write(&self, buf: &[u8]) -> Result<usize> {
         match self {
-            DAPLinkDevice::V1(device) => Ok(device.write(buf)?),
+            DAPLinkDevice::V1(device, _) => Ok(device.write(buf)?),
             DAPLinkDevice::V2 {
                 handle,
                 out_ep,
@@ -135,12 +135,12 @@ pub(crate) fn send_command<Req: Request, Res: Response>(
     if let Ok(device) = device.get_mut() {
         // On Windows, HID writes must write exactly the size of the
         // largest report for the device, but there's no way to query
-        // this in hidapi. All known CMSIS-DAP devices use 64-byte
-        // HID reports (the maximum permitted), so ensure we always
-        // write exactly 64 (+1 for report ID) bytes for HID.
+        // this in hidapi. Most CMSIS-DAP devices use 64-byte
+        // HID reports (the maximum permitted) but some have non-standard report sizes.
+        // Ensure we always write exactly `report_size` (+1 for report ID) bytes for HID.
         // For v2 devices, we can write the precise request size.
-        if let DAPLinkDevice::V1(_) = device {
-            size = 65;
+        if let DAPLinkDevice::V1(_, report_size) = device {
+            size = *report_size + 1;
         }
 
         // Send buffer to the device.
